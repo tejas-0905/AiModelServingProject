@@ -6,12 +6,20 @@ FastAPI serves Hugging Face model endpoints and the Vite React frontend provides
 
 ```bash
 cd backend
+python -m venv venv
 venv\Scripts\activate
 pip install -r requirements.txt
 python app.py
 ```
 
 The API runs at `http://localhost:8000`.
+
+For Render deployment, use:
+
+- Root Directory: `backend`
+- Build Command: `pip install -r requirements.txt`
+- Start Command: `uvicorn app:app --host 0.0.0.0 --port $PORT`
+- Python version: `3.11.11` from `backend/.python-version`
 
 Available endpoints:
 
