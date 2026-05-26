@@ -9,6 +9,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 
+os.environ.setdefault("USE_TF", "0")
+os.environ.setdefault("USE_FLAX", "0")
+
 TEXT_GENERATION_MODEL = os.getenv(
     "TEXT_GENERATION_MODEL", "Qwen/Qwen2.5-0.5B-Instruct"
 )
@@ -117,9 +120,31 @@ def resolve_cached_model(model_name: str) -> str:
     return model_name
 
 
+def load_pipeline():
+    try:
+        import transformers.utils.import_utils as transformers_import_utils
+
+        transformers_import_utils._torchvision_available = False
+
+        from transformers import pipeline
+    except ImportError as exc:
+        raise RuntimeError(
+            "Could not import transformers.pipeline. Rebuild the backend environment "
+            "with the pinned dependencies in requirements.txt."
+        ) from exc
+    except RuntimeError as exc:
+        raise RuntimeError(
+            "Could not import transformers.pipeline. This is usually caused by an "
+            "incompatible torchvision package in the runtime; remove torchvision or "
+            "rebuild the environment from requirements.txt."
+        ) from exc
+
+    return pipeline
+
+
 @lru_cache(maxsize=1)
 def get_text_generator():
-    from transformers import pipeline
+    pipeline = load_pipeline()
 
     generator = pipeline(
         "text-generation",
@@ -134,7 +159,7 @@ def get_text_generator():
 
 @lru_cache(maxsize=1)
 def get_summarizer():
-    from transformers import pipeline
+    pipeline = load_pipeline()
 
     return pipeline(
         "summarization",
@@ -144,7 +169,7 @@ def get_summarizer():
 
 @lru_cache(maxsize=1)
 def get_sentiment_analyzer():
-    from transformers import pipeline
+    pipeline = load_pipeline()
 
     return pipeline(
         "sentiment-analysis",
@@ -154,7 +179,7 @@ def get_sentiment_analyzer():
 
 @lru_cache(maxsize=1)
 def get_question_answerer():
-    from transformers import pipeline
+    pipeline = load_pipeline()
 
     return pipeline(
         "question-answering",
