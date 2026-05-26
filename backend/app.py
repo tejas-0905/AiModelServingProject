@@ -394,4 +394,5 @@ if __name__ == "__main__":
     import uvicorn
 
     port = int(os.getenv("PORT", "8000"))
-    uvicorn.run("app:app", host="0.0.0.0", port=port, reload=True)
+    reload_enabled = os.getenv("APP_RELOAD", "false").lower() in {"1", "true", "yes"}
+    uvicorn.run("app:app", host="0.0.0.0", port=port, reload=reload_enabled)
