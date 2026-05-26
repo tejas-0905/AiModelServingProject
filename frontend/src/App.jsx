@@ -137,7 +137,7 @@ function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(form)
       });
-      const data = await response.json();
+      const data = await readApiResponse(response);
 
       if (!response.ok) {
         const detail = typeof data.detail === "string" ? data.detail : "Request failed";
@@ -155,7 +155,7 @@ function App() {
         ...current
       ].slice(0, 5));
     } catch (err) {
-      setError(err.message || "Something went wrong");
+      setError(getRequestError(err));
     } finally {
       setLoading(false);
     }
@@ -359,6 +359,25 @@ function App() {
       </section>
     </main>
   );
+}
+
+async function readApiResponse(response) {
+  const contentType = response.headers.get("content-type") || "";
+
+  if (contentType.includes("application/json")) {
+    return response.json();
+  }
+
+  const text = await response.text();
+  return { detail: text || `Request failed with ${response.status}` };
+}
+
+function getRequestError(error) {
+  if (error instanceof TypeError) {
+    return `Unable to reach the API at ${API_BASE_URL}. Check that the backend is deployed, awake, and allowed by CORS.`;
+  }
+
+  return error.message || "Something went wrong";
 }
 
 function Field({ label, count, children }) {
