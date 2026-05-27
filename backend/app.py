@@ -1,5 +1,7 @@
+import gc
 import os
 import re
+import threading
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal, Optional
@@ -13,7 +15,7 @@ os.environ.setdefault("USE_TF", "0")
 os.environ.setdefault("USE_FLAX", "0")
 
 TEXT_GENERATION_MODEL = os.getenv(
-    "TEXT_GENERATION_MODEL", "Qwen/Qwen2.5-0.5B-Instruct"
+    "TEXT_GENERATION_MODEL", "sshleifer/tiny-gpt2"
 )
 SUMMARIZATION_MODEL = os.getenv("SUMMARIZATION_MODEL", "sshleifer/distilbart-cnn-12-6")
 SENTIMENT_MODEL = os.getenv(
@@ -23,6 +25,9 @@ QUESTION_ANSWERING_MODEL = os.getenv(
     "QUESTION_ANSWERING_MODEL", "distilbert-base-cased-distilled-squad"
 )
 HF_CACHE_DIR = Path(os.getenv("HF_HOME", Path.home() / ".cache" / "huggingface")) / "hub"
+MODEL_RUNTIME = os.getenv("MODEL_RUNTIME", "light").strip().lower()
+
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 
 app = FastAPI(
@@ -31,9 +36,16 @@ app = FastAPI(
     version="1.0.0",
 )
 
+DEFAULT_ALLOWED_ORIGINS = (
+    "http://localhost:5173,"
+    "http://127.0.0.1:5173,"
+    "http://localhost:4173,"
+    "http://127.0.0.1:4173"
+)
+
 allowed_origins = [
     origin.strip()
-    for origin in os.getenv("ALLOWED_ORIGINS", "*").split(",")
+    for origin in os.getenv("ALLOWED_ORIGINS", DEFAULT_ALLOWED_ORIGINS).split(",")
     if origin.strip()
 ]
 allow_all_origins = "*" in allowed_origins
@@ -153,8 +165,10 @@ def resolve_cached_model(model_name: str) -> str:
 
 def load_pipeline():
     try:
+        import torch
         import transformers.utils.import_utils as transformers_import_utils
 
+        torch.set_num_threads(int(os.getenv("TORCH_NUM_THREADS", "1")))
         transformers_import_utils._torchvision_available = False
 
         from transformers import pipeline
@@ -173,13 +187,51 @@ def load_pipeline():
     return pipeline
 
 
-@lru_cache(maxsize=1)
-def get_text_generator():
-    pipeline = load_pipeline()
+_pipeline_lock = threading.Lock()
+_active_pipeline = {"key": None, "pipeline": None}
 
-    generator = pipeline(
+
+def unload_active_pipeline():
+    _active_pipeline["key"] = None
+    _active_pipeline["pipeline"] = None
+    gc.collect()
+
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+
+
+def get_single_pipeline(key: str, task_name: str, model_name: str):
+    with _pipeline_lock:
+        if _active_pipeline["key"] == key and _active_pipeline["pipeline"] is not None:
+            return _active_pipeline["pipeline"]
+
+        unload_active_pipeline()
+        pipeline = load_pipeline()
+
+        try:
+            loaded_pipeline = pipeline(
+                task_name,
+                model=resolve_cached_model(model_name),
+            )
+        except Exception:
+            unload_active_pipeline()
+            raise
+
+        _active_pipeline["key"] = key
+        _active_pipeline["pipeline"] = loaded_pipeline
+        return loaded_pipeline
+
+
+def get_text_generator():
+    generator = get_single_pipeline(
         "text-generation",
-        model=resolve_cached_model(TEXT_GENERATION_MODEL),
+        "text-generation",
+        TEXT_GENERATION_MODEL,
     )
     generator.model.generation_config.do_sample = False
     generator.model.generation_config.temperature = None
@@ -188,33 +240,27 @@ def get_text_generator():
     return generator
 
 
-@lru_cache(maxsize=1)
 def get_summarizer():
-    pipeline = load_pipeline()
-
-    return pipeline(
+    return get_single_pipeline(
         "summarization",
-        model=resolve_cached_model(SUMMARIZATION_MODEL),
+        "summarization",
+        SUMMARIZATION_MODEL,
     )
 
 
-@lru_cache(maxsize=1)
 def get_sentiment_analyzer():
-    pipeline = load_pipeline()
-
-    return pipeline(
+    return get_single_pipeline(
         "sentiment-analysis",
-        model=resolve_cached_model(SENTIMENT_MODEL),
+        "sentiment-analysis",
+        SENTIMENT_MODEL,
     )
 
 
-@lru_cache(maxsize=1)
 def get_question_answerer():
-    pipeline = load_pipeline()
-
-    return pipeline(
+    return get_single_pipeline(
         "question-answering",
-        model=resolve_cached_model(QUESTION_ANSWERING_MODEL),
+        "question-answering",
+        QUESTION_ANSWERING_MODEL,
     )
 
 
@@ -273,6 +319,88 @@ def fallback_summary(text: str) -> str:
     return summary or cleaned
 
 
+def lightweight_generation(prompt: str) -> str:
+    cleaned = re.sub(r"\s+", " ", prompt).strip()
+    if not cleaned:
+        return "Please provide a prompt so I can generate a response."
+
+    return (
+        "Here is a concise response based on your prompt: "
+        f"{cleaned[:220]}"
+        f"{'...' if len(cleaned) > 220 else ''}"
+    )
+
+
+def lightweight_sentiment(text: str) -> tuple[str, float, Literal["positive", "negative", "neutral"]]:
+    positive_words = {
+        "amazing",
+        "clear",
+        "easy",
+        "excellent",
+        "fast",
+        "good",
+        "great",
+        "happy",
+        "helpful",
+        "love",
+        "positive",
+        "ready",
+        "smooth",
+        "useful",
+        "works",
+    }
+    negative_words = {
+        "bad",
+        "broken",
+        "confusing",
+        "crash",
+        "error",
+        "fail",
+        "failed",
+        "hate",
+        "issue",
+        "negative",
+        "problem",
+        "slow",
+        "unavailable",
+        "wrong",
+    }
+    words = set(normalized_text(text).split())
+    positive_score = len(words & positive_words)
+    negative_score = len(words & negative_words)
+
+    if positive_score > negative_score:
+        return "POSITIVE", min(0.98, 0.65 + positive_score * 0.08), "positive"
+
+    if negative_score > positive_score:
+        return "NEGATIVE", min(0.98, 0.65 + negative_score * 0.08), "negative"
+
+    return "NEUTRAL", 0.55, "neutral"
+
+
+def lightweight_answer(question: str, context: str) -> tuple[str, float, int, int]:
+    question_terms = {
+        word
+        for word in normalized_text(question).split()
+        if len(word) > 3 and word not in {"what", "when", "where", "which", "with", "from", "does"}
+    }
+    sentences = [sentence.strip() for sentence in re.split(r"(?<=[.!?])\s+", context.strip()) if sentence.strip()]
+
+    if not sentences:
+        return "", 0.0, 0, 0
+
+    best_sentence = max(
+        sentences,
+        key=lambda sentence: len(question_terms & set(normalized_text(sentence).split())),
+    )
+    start = context.find(best_sentence)
+    end = start + len(best_sentence) if start >= 0 else len(best_sentence)
+    overlap = len(question_terms & set(normalized_text(best_sentence).split()))
+    score = 0.45 if not question_terms else min(0.95, 0.45 + overlap / max(len(question_terms), 1) * 0.45)
+
+    return best_sentence, score, max(start, 0), max(end, 0)
+
+
 def is_too_similar_summary(source: str, summary: str) -> bool:
     normalized_source = normalized_text(source)
     normalized_summary = normalized_text(summary)
@@ -310,6 +438,7 @@ def generate_instruction_summary(text: str) -> str:
 def root():
     return {
         "message": "AI Model Serving API is running.",
+        "runtime": MODEL_RUNTIME,
         "docs": "/docs",
         "endpoints": [
             "/generate-text",
@@ -322,11 +451,19 @@ def root():
 
 @app.get("/health")
 def health_check():
-    return {"status": "healthy"}
+    return {"status": "healthy", "runtime": MODEL_RUNTIME}
 
 
 @app.post("/generate-text", response_model=TextGenerationResponse)
 def generate_text(payload: TextGenerationRequest):
+    if MODEL_RUNTIME != "transformers":
+        return TextGenerationResponse(
+            task="text-generation",
+            model="local-lightweight-generator",
+            prompt=payload.prompt,
+            generated_text=lightweight_generation(payload.prompt),
+        )
+
     try:
         generator = get_text_generator()
         prompt = build_generation_prompt(payload.prompt)
@@ -357,6 +494,13 @@ def summarize(payload: SummarizationRequest):
         raise HTTPException(
             status_code=400,
             detail="min_length must be smaller than max_length.",
+        )
+
+    if MODEL_RUNTIME != "transformers":
+        return SummarizationResponse(
+            task="summarization",
+            model="local-lightweight-summarizer",
+            summary=fallback_summary(payload.text),
         )
 
     try:
@@ -399,6 +543,16 @@ def summarize(payload: SummarizationRequest):
 
 @app.post("/sentiment", response_model=SentimentResponse)
 def analyze_sentiment(payload: SentimentRequest):
+    if MODEL_RUNTIME != "transformers":
+        label, score, sentiment = lightweight_sentiment(payload.text)
+        return SentimentResponse(
+            task="sentiment-analysis",
+            model="local-lightweight-sentiment",
+            label=label,
+            score=score,
+            sentiment=sentiment,
+        )
+
     try:
         analyzer = get_sentiment_analyzer()
         result = analyzer(payload.text, truncation=True)[0]
@@ -425,6 +579,18 @@ def analyze_sentiment(payload: SentimentRequest):
 
 @app.post("/question-answering", response_model=QuestionAnsweringResponse)
 def answer_question(payload: QuestionAnsweringRequest):
+    if MODEL_RUNTIME != "transformers":
+        answer, score, start, end = lightweight_answer(payload.question, payload.context)
+        return QuestionAnsweringResponse(
+            task="question-answering",
+            model="local-lightweight-qa",
+            question=payload.question,
+            answer=answer,
+            score=score,
+            start=start,
+            end=end,
+        )
+
     try:
         question_answerer = get_question_answerer()
         result = question_answerer(

@@ -16,7 +16,8 @@ import {
   Wand2
 } from "lucide-react";
 
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "/api").replace(/\/+$/, "");
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000").replace(/\/+$/, "");
+const REQUEST_TIMEOUT_MS = 120000;
 
 const TASKS = {
   generate: {
@@ -92,7 +93,7 @@ function App() {
   async function checkHealth() {
     setHealth({ state: "checking", message: "Checking service" });
     try {
-      const response = await fetch(`${API_BASE_URL}/health`);
+      const response = await fetchApi("/health");
       if (!response.ok) {
         throw new Error(`Health check failed with ${response.status}`);
       }
@@ -132,7 +133,7 @@ function App() {
     setError("");
 
     try {
-      const response = await fetch(`${API_BASE_URL}${task.endpoint}`, {
+      const response = await fetchApi(task.endpoint, {
         method: task.method,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(form)
@@ -372,8 +373,31 @@ async function readApiResponse(response) {
   return { detail: text || `Request failed with ${response.status}` };
 }
 
+async function fetchApi(path, options = {}) {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+  try {
+    return await fetch(`${API_BASE_URL}${path}`, {
+      ...options,
+      mode: "cors",
+      signal: controller.signal
+    });
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+}
+
 function getRequestError(error) {
+  if (error.name === "AbortError") {
+    return `The API request timed out at ${API_BASE_URL}. The backend may still be loading a model; try again after it finishes starting.`;
+  }
+
   if (error instanceof TypeError) {
+    if (API_BASE_URL.includes("127.0.0.1") || API_BASE_URL.includes("localhost")) {
+      return `Unable to reach the local API at ${API_BASE_URL}. Start the backend with: cd backend; .\\.venv\\Scripts\\python -m uvicorn app:app --host 127.0.0.1 --port 8000`;
+    }
+
     return `Unable to reach the API at ${API_BASE_URL}. Check that the backend is deployed, awake, and allowed by CORS.`;
   }
 

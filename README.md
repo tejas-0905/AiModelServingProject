@@ -20,6 +20,14 @@ For Render deployment, use:
 - Build Command: `pip install -r requirements.txt`
 - Start Command: `uvicorn app:app --host 0.0.0.0 --port $PORT`
 - Python version: `3.11.11` from `backend/.python-version`
+- Environment:
+  - `MODEL_RUNTIME=light` for low-memory Render instances.
+  - `MODEL_RUNTIME=transformers` only if your instance has enough memory for Hugging Face models.
+  - `ALLOWED_ORIGINS=https://your-frontend-domain.onrender.com,http://localhost:5173`
+
+The default backend runtime is `light` to avoid Render memory-limit restarts. In
+`transformers` mode, the backend keeps only one Hugging Face pipeline in memory
+at a time, but model loading can still require a larger instance.
 
 Available endpoints:
 
