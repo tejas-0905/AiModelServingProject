@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: aimodelservingproject
+    env: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app.py
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.11
+      - key: MODEL_RUNTIME
+        value: light
+      - key: TORCH_NUM_THREADS
+        value: "1"
+      - key: ALLOWED_ORIGINS
+        value: https://aimodelservingproject-frontend.onrender.com,http://localhost:5173,http://127.0.0.1:5173

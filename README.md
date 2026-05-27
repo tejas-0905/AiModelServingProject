@@ -18,7 +18,8 @@ For Render deployment, use:
 
 - Root Directory: `backend`
 - Build Command: `pip install -r requirements.txt`
-- Start Command: `uvicorn app:app --host 0.0.0.0 --port $PORT`
+- Start Command: `python app.py`
+- Health Check Path: `/health`
 - Python version: `3.11.11` from `backend/.python-version`
 - Environment:
   - `MODEL_RUNTIME=light` for low-memory Render instances.
@@ -28,6 +29,13 @@ For Render deployment, use:
 The default backend runtime is `light` to avoid Render memory-limit restarts. In
 `transformers` mode, the backend keeps only one Hugging Face pipeline in memory
 at a time, but model loading can still require a larger instance.
+
+The default `backend/requirements.txt` installs only the web API dependencies.
+For local transformer experiments, install the optional ML packages too:
+
+```bash
+pip install -r requirements.txt -r requirements-ml.txt
+```
 
 Available endpoints:
 
@@ -39,7 +47,7 @@ Available endpoints:
 
 Default task models:
 
-- Text generation: `Qwen/Qwen2.5-0.5B-Instruct`
+- Text generation: `sshleifer/tiny-gpt2`
 - Summarization: `sshleifer/distilbart-cnn-12-6`
 - Sentiment: `distilbert-base-uncased-finetuned-sst-2-english`
 - Question answering: `distilbert-base-cased-distilled-squad`

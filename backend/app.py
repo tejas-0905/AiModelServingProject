@@ -1,4 +1,5 @@
 import gc
+import logging
 import os
 import re
 import threading
@@ -10,6 +11,8 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+
+logger = logging.getLogger("ai-model-serving")
 
 os.environ.setdefault("USE_TF", "0")
 os.environ.setdefault("USE_FLAX", "0")
@@ -59,6 +62,16 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+def log_startup_config():
+    logger.warning(
+        "Starting AI Model Serving API on port=%s runtime=%s allowed_origins=%s",
+        os.getenv("PORT", "8000"),
+        MODEL_RUNTIME,
+        ",".join(allowed_origins),
+    )
 
 
 def get_cors_origin(origin: str | None) -> str:
