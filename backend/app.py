@@ -4,7 +4,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -37,7 +37,7 @@ allowed_origins = [
     if origin.strip()
 ]
 allow_all_origins = "*" in allowed_origins
-allowed_origin_regex = os.getenv("ALLOWED_ORIGIN_REGEX", ".*")
+allowed_origin_regex = os.getenv("ALLOWED_ORIGIN_REGEX", "")
 
 app.add_middleware(
     CORSMiddleware,
@@ -47,6 +47,33 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def get_cors_origin(origin: str | None) -> str:
+    if allow_all_origins:
+        return "*"
+
+    if origin and origin in allowed_origins:
+        return origin
+
+    if origin and allowed_origin_regex and re.fullmatch(allowed_origin_regex, origin):
+        return origin
+
+    return "null"
+
+
+@app.options("/{full_path:path}", include_in_schema=False)
+def preflight(full_path: str, request: Request):
+    requested_headers = request.headers.get("access-control-request-headers", "*")
+    return Response(
+        status_code=204,
+        headers={
+            "Access-Control-Allow-Origin": get_cors_origin(request.headers.get("origin")),
+            "Access-Control-Allow-Methods": "DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT",
+            "Access-Control-Allow-Headers": requested_headers,
+            "Access-Control-Max-Age": "600",
+        },
+    )
 
 
 class TextGenerationRequest(BaseModel):
